@@ -131,13 +131,13 @@ This module supports client side encryption using [google Tink](https://github.c
 1. Add the package:
 
 ```console
-go get github.com/caddyserver/certmagic-oss
+go get github.com/aUsernameWoW/certmagic-oss
 ```
 
 2. Create a `certmagicoss.NewStorage` with a `certmagicoss.StorageConfig`:
 
 ```golang
-import certmagicoss "github.com/caddyserver/certmagic-oss/storage"
+import certmagicoss "github.com/aUsernameWoW/certmagic-oss/storage"
 
 bucket := "my-example-bucket"
 endpoint := "your-oss-endpoint"

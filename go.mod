@@ -1,4 +1,4 @@
-module github.com/caddyserver/certmagic-oss
+module github.com/aUsernameWoW/certmagic-oss
 
 go 1.23.0
 
