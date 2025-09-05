@@ -196,6 +196,9 @@ To build Caddy with this module, you can use `xcaddy`:
      --with github.com/caddyserver/nginx-adapter
    ```
 
+## Credits
+This project was written entirely by Qwen Coder. During the coding process, Qwen Coder was inspired by the project [certmagic-gcs](https://github.com/grafana/certmagic-gcs). We would like to thank them for their high-quality code and Qwen Coder for their dedication.
+
 ## License
 
 This module is distributed under [Apache-2.0](LICENSE).
