@@ -24,6 +24,8 @@ var (
 type CaddyStorageOSS struct {
 	// BucketName is the name of the storage bucket.
 	BucketName string `json:"bucket-name"`
+	// Region is the OSS region.
+	Region string `json:"region"`
 	// Endpoint is the OSS endpoint.
 	Endpoint string `json:"endpoint"`
 	// AccessKeyID is the access key ID for OSS.
@@ -52,6 +54,7 @@ func (CaddyStorageOSS) CaddyModule() caddy.ModuleInfo {
 func (s *CaddyStorageOSS) CertMagicStorage() (certmagic.Storage, error) {
 	config := storage.Config{
 		BucketName:      s.BucketName,
+		Region:          s.Region,
 		Endpoint:        s.Endpoint,
 		AccessKeyID:     s.AccessKeyID,
 		AccessKeySecret: s.AccessKeySecret,
@@ -86,8 +89,8 @@ func (s *CaddyStorageOSS) Validate() error {
 	if s.BucketName == "" {
 		return fmt.Errorf("bucket name must be defined")
 	}
-	if s.Endpoint == "" {
-		return fmt.Errorf("endpoint must be defined")
+	if s.Region == "" {
+		return fmt.Errorf("region must be defined")
 	}
 	if s.AccessKeyID == "" {
 		return fmt.Errorf("access key id must be defined")
@@ -111,6 +114,8 @@ func (s *CaddyStorageOSS) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		switch key {
 		case "bucket-name":
 			s.BucketName = value
+		case "region":
+			s.Region = value
 		case "endpoint":
 			s.Endpoint = value
 		case "access-key-id":

@@ -15,6 +15,7 @@ In this section, we create a caddy config using our OSS storage.
     {
       storage oss {
         bucket-name your-bucket-name
+        region your-oss-region
         endpoint your-oss-endpoint
         access-key-id your-access-key-id
         access-key-secret your-access-key-secret
@@ -42,6 +43,7 @@ Create a JSON config file with the following content:
   "storage": {
     "module": "oss",
     "bucket-name": "your-bucket-name",
+    "region": "your-oss-region",
     "endpoint": "your-oss-endpoint",
     "access-key-id": "your-access-key-id",
     "access-key-secret": "your-access-key-secret"
@@ -82,6 +84,7 @@ This module supports client side encryption using [google Tink](https://github.c
     {
       storage oss {
         bucket-name your-bucket-name
+        region your-oss-region
         endpoint your-oss-endpoint
         access-key-id your-access-key-id
         access-key-secret your-access-key-secret
@@ -109,6 +112,7 @@ This module supports client side encryption using [google Tink](https://github.c
       "storage": {
         "module": "oss",
         "bucket-name": "your-bucket-name",
+        "region": "your-oss-region",
         "endpoint": "your-oss-endpoint",
         "access-key-id": "your-access-key-id",
         "access-key-secret": "your-access-key-secret",
@@ -134,20 +138,22 @@ This module supports client side encryption using [google Tink](https://github.c
 go get github.com/aUsernameWoW/certmagic-oss
 ```
 
-2. Create a `certmagicoss.NewStorage` with a `certmagicoss.StorageConfig`:
+2. Create a `certmagicoss.NewStorage` with a `certmagicoss.Config`:
 
 ```golang
 import certmagicoss "github.com/aUsernameWoW/certmagic-oss/storage"
 
 bucket := "my-example-bucket"
+region := "your-oss-region"
 endpoint := "your-oss-endpoint"
 accessKeyID := "your-access-key-id"
 accessKeySecret := "your-access-key-secret"
 
 oss, _ := certmagicoss.NewStorage(
   context.Background(), 
-  &certmagicoss.StorageConfig{
+  certmagicoss.Config{
     BucketName: bucket,
+    Region: region,
     Endpoint: endpoint,
     AccessKeyID: accessKeyID,
     AccessKeySecret: accessKeySecret,
