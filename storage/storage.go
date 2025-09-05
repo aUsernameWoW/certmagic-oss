@@ -266,44 +266,72 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 	lockKey := s.objLockName(key)
 	
 	for {
-		// Try to get object metadata to check if lock exists
-		_, err := s.client.HeadObject(ctx, &oss.HeadObjectRequest{
+		// Try to create the lock object atomically using ForbidOverwrite header
+		// This will only succeed if the object doesn't already exist
+		_, err := s.client.PutObject(ctx, &oss.PutObjectRequest{
 			Bucket: oss.Ptr(s.bucketName),
 			Key:    oss.Ptr(lockKey),
+			Body:   bytes.NewReader([]byte{}),
+			ForbidOverwrite: oss.Ptr("true"), // This ensures the object is only created if it doesn't exist
 		})
 		
-		// Create the lock if it doesn't exist
-		if err != nil {
-			// Check if it's a "not found" error
-			var serviceErr *oss.ServiceError
-			if !(errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey") {
-				// For other errors, return the error
-				return fmt.Errorf("checking lock %s: %w", lockKey, err)
-			}
-			
-			// Create lock object
-			_, err := s.client.PutObject(ctx, &oss.PutObjectRequest{
+		// If we successfully created the lock, return
+		if err == nil {
+			return nil
+		}
+		
+		// Check if the error is because the lock already exists
+		var serviceErr *oss.ServiceError
+		if errors.As(err, &serviceErr) && (serviceErr.ErrorCode() == "PreconditionFailed" || serviceErr.ErrorCode() == "ObjectAlreadyExists" || serviceErr.ErrorCode() == "FileAlreadyExists") {
+			// Lock already exists, check if it has expired
+			result, err := s.client.HeadObject(ctx, &oss.HeadObjectRequest{
 				Bucket: oss.Ptr(s.bucketName),
 				Key:    oss.Ptr(lockKey),
-				Body:   bytes.NewReader([]byte{}),
 			})
 			
 			if err != nil {
-				return fmt.Errorf("creating %s: %w", lockKey, err)
+				// If we can't check the lock, continue polling
+				select {
+				case <-time.After(LockPollInterval):
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
-			continue
+			
+			// Check if the lock has expired
+			if result.LastModified != nil && result.LastModified.Add(LockExpiration).Before(time.Now().UTC()) {
+				// Lock has expired, try to delete it and then acquire the lock
+				_, deleteErr := s.client.DeleteObject(ctx, &oss.DeleteObjectRequest{
+					Bucket: oss.Ptr(s.bucketName),
+					Key:    oss.Ptr(lockKey),
+				})
+				
+				// If we successfully deleted the expired lock or if it was already deleted, try to acquire the lock again
+				if deleteErr == nil || (errors.As(deleteErr, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey") {
+					continue // Try to acquire the lock again
+				}
+				
+				// If we couldn't delete the expired lock, continue polling
+				select {
+				case <-time.After(LockPollInterval):
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			
+			// Lock exists and hasn't expired, wait and try again
+			select {
+			case <-time.After(LockPollInterval):
+				continue // Try again
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		
-		// TODO: Implement lock expiration logic
-		// For now, we'll just wait and try again
-		
-		// Wait and try again
-		select {
-		case <-time.After(LockPollInterval):
-			continue // a no-op since it's at the end of the loop, but nice to be explicit
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		// For other errors, return the error
+		return fmt.Errorf("creating lock %s: %w", lockKey, err)
 	}
 }
 
@@ -315,7 +343,10 @@ func (s *Storage) Unlock(ctx context.Context, key string) error {
 	lockKey := s.objLockName(key)
 	
 	// Delete the lock object
-	_, err := s.client.DeleteObject(ctx, &oss.DeleteObjectRequest{
+	// We use a background context to ensure we can delete the lock even if the original context is cancelled
+	// This is important for cleanup operations
+	deleteCtx := context.Background()
+	_, err := s.client.DeleteObject(deleteCtx, &oss.DeleteObjectRequest{
 		Bucket: oss.Ptr(s.bucketName),
 		Key:    oss.Ptr(lockKey),
 	})
