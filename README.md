@@ -35,73 +35,20 @@ In this section, we create a caddy config using our OSS storage.
 
 #### Getting started with JSON config
 
-1. Create a `Caddyfile` with the following content:
-    ```
-    {
-      "admin": {
-        "listen": "tcp/localhost:2019"
-      },
-      "logging": {
-        "logs": {
-          "default": {
-            "level": "INFO"
-          }
-        }
-      },
-      "storage": {
-        "module": "oss",
-        "bucket-name": "your-bucket-name",
-        "endpoint": "your-oss-endpoint",
-        "access-key-id": "your-access-key-id",
-        "access-key-secret": "your-access-key-secret"
-      },
-      "apps": {
-        "http": {
-          "servers": {
-            "srv0": {
-              "listen": [
-                ":443"
-              ],
-              "routes": [
-                {
-                  "handle": [
-                    {
-                      "handler": "static_response",
-                      "body": "Hello Caddy Storage OSS!"
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        "tls": {
-          "automation": {
-            "policies": [
-              {
-                "subjects": [
-                  "localhost"
-                ],
-                "issuers": [
-                  {
-                    "module": "internal"
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      }
-    }
-    ```
-2. Start caddy
-    ```console
-    $ xcaddy run
-    ```
-3. Check that it works
-    ```console
-    $ open https://localhost
-    ```
+Create a JSON config file with the following content:
+```json
+{
+  …
+  "storage": {
+    "module": "oss",
+    "bucket-name": "your-bucket-name",
+    "endpoint": "your-oss-endpoint",
+    "access-key-id": "your-access-key-id",
+    "access-key-secret": "your-access-key-secret"
+  },
+  …
+}
+```
 
 ### Client Side Encryption
 
@@ -158,16 +105,7 @@ This module supports client side encryption using [google Tink](https://github.c
 2. Create a JSON config file with the following content:
     ```json
     {
-      "admin": {
-        "listen": "tcp/localhost:2019"
-      },
-      "logging": {
-        "logs": {
-          "default": {
-            "level": "INFO"
-          }
-        }
-      },
+      …
       "storage": {
         "module": "oss",
         "bucket-name": "your-bucket-name",
@@ -176,43 +114,7 @@ This module supports client side encryption using [google Tink](https://github.c
         "access-key-secret": "your-access-key-secret",
         "encryption-key-set": "./keyset.json"
       },
-      "apps": {
-        "http": {
-          "servers": {
-            "srv0": {
-              "listen": [
-                ":443"
-              ],
-              "routes": [
-                {
-                  "handle": [
-                    {
-                      "handler": "static_response",
-                      "body": "Hello Caddy Storage OSS!"
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        "tls": {
-          "automation": {
-            "policies": [
-              {
-                "subjects": [
-                  "localhost"
-                ],
-                "issuers": [
-                  {
-                    "module": "internal"
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      }
+      …
     }
     ```
 3. Start caddy
