@@ -25,6 +25,7 @@ In this section, we create a caddy config using our OSS storage.
     acme_server
     respond "Hello Caddy Storage OSS!"
     ```
+   NOTE: See [https://www.alibabacloud.com/help/zh/oss/regions-and-endpoints](https://www.alibabacloud.com/help/zh/oss/regions-and-endpoints) for OSS Region & Endpoint parameters.
 2. Start caddy
     ```console
     $ xcaddy run
