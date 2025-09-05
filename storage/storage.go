@@ -3,8 +3,11 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
@@ -59,7 +62,12 @@ func NewStorage(ctx context.Context, config Config) (*Storage, error) {
 	
 	// If endpoint is specified, use it
 	if config.Endpoint != "" {
-		cfg = cfg.WithEndpoint(config.Endpoint)
+		// Validate and format endpoint URL
+		endpoint := config.Endpoint
+		if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+			endpoint = "https://" + endpoint
+		}
+		cfg = cfg.WithEndpoint(endpoint)
 	}
 	
 	// Create client
@@ -104,7 +112,10 @@ func (s *Storage) Load(ctx context.Context, key string) ([]byte, error) {
 	
 	if err != nil {
 		// Check if it's a "not found" error
-		// TODO: Check the specific error type for "not found" in v2 SDK
+		var serviceErr *oss.ServiceError
+		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
+			return nil, fs.ErrNotExist
+		}
 		return nil, fmt.Errorf("loading object %s: %w", key, err)
 	}
 	defer result.Body.Close()
@@ -131,7 +142,12 @@ func (s *Storage) Delete(ctx context.Context, key string) error {
 	})
 	
 	if err != nil {
-		// TODO: Check the specific error type for "not found" in v2 SDK
+		// Check if it's a "not found" error
+		var serviceErr *oss.ServiceError
+		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
+			// Ignore "not found" errors
+			return nil
+		}
 		return fmt.Errorf("deleting object %s: %w", key, err)
 	}
 	return nil
@@ -144,7 +160,17 @@ func (s *Storage) Exists(ctx context.Context, key string) bool {
 		Bucket: oss.Ptr(s.bucketName),
 		Key:    oss.Ptr(key),
 	})
-	return err == nil
+	
+	// Check if it's a "not found" error
+	if err != nil {
+		var serviceErr *oss.ServiceError
+		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
+			return false
+		}
+		// For other errors, we assume the key doesn't exist
+		return false
+	}
+	return true
 }
 
 // List returns all keys that match prefix.
@@ -195,7 +221,11 @@ func (s *Storage) Stat(ctx context.Context, key string) (certmagic.KeyInfo, erro
 	})
 	
 	if err != nil {
-		// TODO: Check the specific error type for "not found" in v2 SDK
+		// Check if it's a "not found" error
+		var serviceErr *oss.ServiceError
+		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
+			return keyInfo, fs.ErrNotExist
+		}
 		return keyInfo, fmt.Errorf("loading attributes for %s: %w", key, err)
 	}
 	
@@ -244,6 +274,13 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 		
 		// Create the lock if it doesn't exist
 		if err != nil {
+			// Check if it's a "not found" error
+			var serviceErr *oss.ServiceError
+			if !(errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey") {
+				// For other errors, return the error
+				return fmt.Errorf("checking lock %s: %w", lockKey, err)
+			}
+			
 			// Create lock object
 			_, err := s.client.PutObject(ctx, &oss.PutObjectRequest{
 				Bucket: oss.Ptr(s.bucketName),
@@ -283,10 +320,13 @@ func (s *Storage) Unlock(ctx context.Context, key string) error {
 		Key:    oss.Ptr(lockKey),
 	})
 	
-	// TODO: Check if the error is "not found" to ignore it
-	// For now, we'll just return the error as is
-	
+	// Check if the error is "not found" to ignore it
 	if err != nil {
+		var serviceErr *oss.ServiceError
+		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
+			// Ignore "not found" errors
+			return nil
+		}
 		return fmt.Errorf("deleting lock %s: %w", lockKey, err)
 	}
 	
