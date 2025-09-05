@@ -4,10 +4,8 @@ go 1.23.0
 
 toolchain go1.24.2
 
-replace github.com/aliyun/alibabacloud-oss-go-sdk-v2 => ../alibabacloud-oss-go-sdk-v2
-
 require (
-	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v0.0.0-00010101000000-000000000000
+	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v0.0.0-20250812103652-17fa5facaf32
 	github.com/caddyserver/caddy/v2 v2.9.1
 	github.com/caddyserver/certmagic v0.21.6
 	github.com/google/tink/go v1.7.0
