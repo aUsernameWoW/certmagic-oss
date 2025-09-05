@@ -161,6 +161,34 @@ oss, _ := certmagicoss.NewStorage(
 certmagic.Default.Storage = oss
 ```
 
+### Building Caddy with this module
+
+To build Caddy with this module, you can use `xcaddy`:
+
+1. Install xcaddy if you haven't already:
+   ```console
+   go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+   ```
+
+2. Build Caddy with the certmagic-oss module:
+   ```console
+   xcaddy build --with github.com/caddyserver/certmagic-oss
+   ```
+
+3. If you want to specify a specific version or commit:
+   ```console
+   xcaddy build --with github.com/caddyserver/certmagic-oss@v1.0.0
+   # or
+   xcaddy build --with github.com/caddyserver/certmagic-oss@main
+   ```
+
+4. You can also build with other modules:
+   ```console
+   xcaddy build \
+     --with github.com/caddyserver/certmagic-oss \
+     --with github.com/caddyserver/nginx-adapter
+   ```
+
 ## License
 
 This module is distributed under [Apache-2.0](LICENSE).
