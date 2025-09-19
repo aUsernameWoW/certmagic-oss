@@ -52,12 +52,30 @@ func (CaddyStorageOSS) CaddyModule() caddy.ModuleInfo {
 
 // CertMagicStorage returns a cert-magic storage.
 func (s *CaddyStorageOSS) CertMagicStorage() (certmagic.Storage, error) {
+	accessKeyID := s.AccessKeyID
+	if accessKeyID != "" && accessKeyID[0] == '{' && accessKeyID[len(accessKeyID)-1] == '}' {
+		// Handle environment variable placeholders like {env.VAR_NAME}
+		if len(accessKeyID) > 6 && accessKeyID[1:5] == "env." {
+			envVarName := accessKeyID[5 : len(accessKeyID)-1]
+			accessKeyID = os.Getenv(envVarName)
+		}
+	}
+	
+	accessKeySecret := s.AccessKeySecret
+	if accessKeySecret != "" && accessKeySecret[0] == '{' && accessKeySecret[len(accessKeySecret)-1] == '}' {
+		// Handle environment variable placeholders like {env.VAR_NAME}
+		if len(accessKeySecret) > 6 && accessKeySecret[1:5] == "env." {
+			envVarName := accessKeySecret[5 : len(accessKeySecret)-1]
+			accessKeySecret = os.Getenv(envVarName)
+		}
+	}
+	
 	config := storage.Config{
 		BucketName:      s.BucketName,
 		Region:          s.Region,
 		Endpoint:        s.Endpoint,
-		AccessKeyID:     s.AccessKeyID,
-		AccessKeySecret: s.AccessKeySecret,
+		AccessKeyID:     accessKeyID,
+		AccessKeySecret: accessKeySecret,
 	}
 
 	if len(s.EncryptionKeySet) > 0 {
