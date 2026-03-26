@@ -111,9 +111,7 @@ func (s *Storage) Load(ctx context.Context, key string) ([]byte, error) {
 	})
 	
 	if err != nil {
-		// Check if it's a "not found" error
-		var serviceErr *oss.ServiceError
-		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
+		if isNotFound(err) {
 			return nil, fs.ErrNotExist
 		}
 		return nil, fmt.Errorf("loading object %s: %w", key, err)
@@ -142,10 +140,7 @@ func (s *Storage) Delete(ctx context.Context, key string) error {
 	})
 	
 	if err != nil {
-		// Check if it's a "not found" error
-		var serviceErr *oss.ServiceError
-		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
-			// Ignore "not found" errors
+		if isNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("deleting object %s: %w", key, err)
@@ -161,13 +156,7 @@ func (s *Storage) Exists(ctx context.Context, key string) bool {
 		Key:    oss.Ptr(key),
 	})
 	
-	// Check if it's a "not found" error
 	if err != nil {
-		var serviceErr *oss.ServiceError
-		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
-			return false
-		}
-		// For other errors, we assume the key doesn't exist
 		return false
 	}
 	return true
@@ -221,9 +210,7 @@ func (s *Storage) Stat(ctx context.Context, key string) (certmagic.KeyInfo, erro
 	})
 	
 	if err != nil {
-		// Check if it's a "not found" error
-		var serviceErr *oss.ServiceError
-		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
+		if isNotFound(err) {
 			return keyInfo, fs.ErrNotExist
 		}
 		return keyInfo, fmt.Errorf("loading attributes for %s: %w", key, err)
@@ -308,7 +295,7 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 				})
 				
 				// If we successfully deleted the expired lock or if it was already deleted, try to acquire the lock again
-				if deleteErr == nil || (errors.As(deleteErr, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey") {
+				if deleteErr == nil || isNotFound(deleteErr) {
 					continue // Try to acquire the lock again
 				}
 				
@@ -351,11 +338,8 @@ func (s *Storage) Unlock(ctx context.Context, key string) error {
 		Key:    oss.Ptr(lockKey),
 	})
 	
-	// Check if the error is "not found" to ignore it
 	if err != nil {
-		var serviceErr *oss.ServiceError
-		if errors.As(err, &serviceErr) && serviceErr.ErrorCode() == "NoSuchKey" {
-			// Ignore "not found" errors
+		if isNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("deleting lock %s: %w", lockKey, err)
@@ -366,6 +350,22 @@ func (s *Storage) Unlock(ctx context.Context, key string) error {
 
 func (s *Storage) objLockName(key string) string {
 	return key + ".lock"
+}
+
+// isNotFound checks whether the error indicates that an OSS object does not exist.
+// It checks both the OSS error code ("NoSuchKey") and the HTTP status code (404),
+// because the Alibaba Cloud OSS v2 SDK may return either depending on the operation.
+func isNotFound(err error) bool {
+	var serviceErr *oss.ServiceError
+	if errors.As(err, &serviceErr) {
+		if serviceErr.ErrorCode() == "NoSuchKey" {
+			return true
+		}
+		if serviceErr.StatusCode == 404 {
+			return true
+		}
+	}
+	return false
 }
 
 // cleartext implements tink.AAED interface, but simply store the object in plaintext
