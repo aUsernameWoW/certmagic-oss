@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -35,6 +36,9 @@ type CaddyStorageOSS struct {
 	AccessKeySecret string `json:"access-key-secret"`
 	// EncryptionKeySet is the path of a json tink encryption keyset
 	EncryptionKeySet string `json:"encryption-key-set"`
+	// LockExpiration is the duration (e.g. "5m", "10m") before a distributed
+	// lock is considered expired. Defaults to 5 minutes.
+	LockExpiration string `json:"lock-expiration,omitempty"`
 }
 
 func init() {
@@ -55,12 +59,22 @@ func (CaddyStorageOSS) CaddyModule() caddy.ModuleInfo {
 func (s *CaddyStorageOSS) CertMagicStorage() (certmagic.Storage, error) {
 	repl := caddy.NewReplacer()
 
+	var lockExp time.Duration
+	if lockStr := repl.ReplaceAll(s.LockExpiration, ""); lockStr != "" {
+		var err error
+		lockExp, err = time.ParseDuration(lockStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid lock-expiration %q: %w", lockStr, err)
+		}
+	}
+
 	config := storage.Config{
 		BucketName:      repl.ReplaceAll(s.BucketName, ""),
 		Region:          repl.ReplaceAll(s.Region, ""),
 		Endpoint:        repl.ReplaceAll(s.Endpoint, ""),
 		AccessKeyID:     repl.ReplaceAll(s.AccessKeyID, ""),
 		AccessKeySecret: repl.ReplaceAll(s.AccessKeySecret, ""),
+		LockExpiration:  lockExp,
 	}
 
 	encryptionKeySet := repl.ReplaceAll(s.EncryptionKeySet, "")
@@ -129,6 +143,8 @@ func (s *CaddyStorageOSS) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			s.AccessKeySecret = value
 		case "encryption-key-set":
 			s.EncryptionKeySet = value
+		case "lock-expiration":
+			s.LockExpiration = value
 		}
 	}
 	return nil

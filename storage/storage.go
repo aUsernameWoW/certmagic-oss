@@ -17,17 +17,18 @@ import (
 )
 
 var (
-	// LockExpiration is the duration before which a Lock is considered expired
-	LockExpiration = 1 * time.Minute
+	// DefaultLockExpiration is the default duration before which a Lock is considered expired.
+	DefaultLockExpiration = 5 * time.Minute
 	// LockPollInterval is the interval between each check of the lock state.
 	LockPollInterval = 1 * time.Second
 )
 
 // Storage is a certmagic.Storage backed by an OSS bucket
 type Storage struct {
-	client     *oss.Client
-	bucketName string
-	aead       tink.AEAD
+	client         *oss.Client
+	bucketName     string
+	aead           tink.AEAD
+	lockExpiration time.Duration
 }
 
 // Interface guards
@@ -49,6 +50,9 @@ type Config struct {
 	AccessKeyID string
 	// AccessKeySecret is the access key secret for OSS
 	AccessKeySecret string
+	// LockExpiration is the duration before a lock is considered expired.
+	// Defaults to DefaultLockExpiration (5 minutes) if zero.
+	LockExpiration time.Duration
 }
 
 func NewStorage(ctx context.Context, config Config) (*Storage, error) {
@@ -80,7 +84,12 @@ func NewStorage(ctx context.Context, config Config) (*Storage, error) {
 		kp = new(cleartext)
 	}
 	
-	return &Storage{client: client, bucketName: config.BucketName, aead: kp}, nil
+	lockExp := config.LockExpiration
+	if lockExp == 0 {
+		lockExp = DefaultLockExpiration
+	}
+
+	return &Storage{client: client, bucketName: config.BucketName, aead: kp, lockExpiration: lockExp}, nil
 }
 
 // Store puts value at key.
@@ -308,7 +317,7 @@ func (s *Storage) Lock(ctx context.Context, key string) error {
 			}
 			
 			// Check if the lock has expired
-			if result.LastModified != nil && result.LastModified.Add(LockExpiration).Before(time.Now().UTC()) {
+			if result.LastModified != nil && result.LastModified.Add(s.lockExpiration).Before(time.Now().UTC()) {
 				// Lock has expired, try to delete it and then acquire the lock
 				_, deleteErr := s.client.DeleteObject(ctx, &oss.DeleteObjectRequest{
 					Bucket: oss.Ptr(s.bucketName),

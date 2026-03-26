@@ -203,9 +203,10 @@ func setupTestStorage(t *testing.T) (*Storage, *httptest.Server) {
 
 	client := oss.NewClient(cfg)
 	s := &Storage{
-		client:     client,
-		bucketName: testBucket,
-		aead:       new(cleartext),
+		client:         client,
+		bucketName:     testBucket,
+		aead:           new(cleartext),
+		lockExpiration: DefaultLockExpiration,
 	}
 
 	t.Cleanup(func() { server.Close() })
@@ -432,12 +433,10 @@ func TestLock_ExpiredLock_Reacquired(t *testing.T) {
 	s, _ := setupTestStorage(t)
 
 	// Make lock expire almost immediately
-	origExp := LockExpiration
+	s.lockExpiration = 50 * time.Millisecond
 	origPoll := LockPollInterval
-	LockExpiration = 50 * time.Millisecond
 	LockPollInterval = 20 * time.Millisecond
 	defer func() {
-		LockExpiration = origExp
 		LockPollInterval = origPoll
 	}()
 
