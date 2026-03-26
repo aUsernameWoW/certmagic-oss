@@ -1,5 +1,7 @@
 # Certmagic Storage Backend for Alibaba Cloud OSS
 
+[![CI](https://github.com/aUsernameWoW/certmagic-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/aUsernameWoW/certmagic-oss/actions/workflows/ci.yml)
+
 This library allows you to use Alibaba Cloud OSS as key/certificate storage backend for your [Certmagic](https://github.com/caddyserver/certmagic)-enabled HTTPS server. To protect your keys from unwanted attention, client-side encryption is possible.
 
 ## Usage
@@ -131,42 +133,68 @@ This module supports client side encryption using [google Tink](https://github.c
     $ tinkey rotate-keyset --in keyset.json  --key-template AES128_GCM_RAW
     ```
 
-### CertMagic
+### Standalone / Library Usage
+
+You can use this module directly in any Go application that uses CertMagic, without Caddy.
 
 1. Add the package:
 
-```console
-go get github.com/aUsernameWoW/certmagic-oss
-```
+    ```console
+    go get github.com/aUsernameWoW/certmagic-oss
+    ```
 
-2. Create a `certmagicoss.NewStorage` with a `certmagicoss.Config`:
+2. Create the storage and register it with CertMagic:
 
-```golang
-import certmagicoss "github.com/aUsernameWoW/certmagic-oss/storage"
+    ```go
+    package main
 
-bucket := "my-example-bucket"
-region := "your-oss-region"
-endpoint := "your-oss-endpoint"
-accessKeyID := "your-access-key-id"
-accessKeySecret := "your-access-key-secret"
+    import (
+        "context"
+        "log"
 
-oss, _ := certmagicoss.NewStorage(
-  context.Background(), 
-  certmagicoss.Config{
-    BucketName: bucket,
-    Region: region,
-    Endpoint: endpoint,
-    AccessKeyID: accessKeyID,
-    AccessKeySecret: accessKeySecret,
-  }
-)
-```
+        "github.com/caddyserver/certmagic"
+        osstorage "github.com/aUsernameWoW/certmagic-oss/storage"
+    )
 
-3. Optionally, [register as default storage](https://github.com/caddyserver/certmagic#storage).
+    func main() {
+        storage, err := osstorage.NewStorage(context.Background(), osstorage.Config{
+            BucketName:      "my-cert-bucket",
+            Region:          "cn-hangzhou",
+            Endpoint:        "oss-cn-hangzhou.aliyuncs.com",
+            AccessKeyID:     "LTAI5t...",
+            AccessKeySecret: "your-secret",
+        })
+        if err != nil {
+            log.Fatal(err)
+        }
 
-```golang
-certmagic.Default.Storage = oss
-```
+        // Use as the default CertMagic storage
+        certmagic.Default.Storage = storage
+
+        // Now CertMagic will store/load certificates from OSS
+        err = certmagic.HTTPS([]string{"example.com"}, nil)
+        if err != nil {
+            log.Fatal(err)
+        }
+    }
+    ```
+
+    For client-side encryption, pass a `tink.AEAD` instance via `Config.AEAD`:
+
+    ```go
+    import (
+        "github.com/google/tink/go/aead"
+        "github.com/google/tink/go/keyset"
+    )
+
+    kh, _ := keyset.NewHandle(aead.AES256GCMKeyTemplate())
+    kp, _ := aead.New(kh)
+
+    storage, _ := osstorage.NewStorage(ctx, osstorage.Config{
+        // ... OSS config ...
+        AEAD: kp,
+    })
+    ```
 
 ### Building Caddy with this module
 
