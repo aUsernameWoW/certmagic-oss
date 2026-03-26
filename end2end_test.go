@@ -1,227 +1,276 @@
 package certmagicoss_test
 
 import (
-	"bytes"
 	"context"
-	"crypto/x509"
+	"encoding/xml"
 	"fmt"
 	"io"
-	"log"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
-	"io/fs"
 
+	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
+	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/credentials"
 	"github.com/caddyserver/certmagic"
 	"github.com/google/tink/go/aead"
 	"github.com/google/tink/go/keyset"
-	"github.com/google/tink/go/tink"
-	"github.com/letsencrypt/pebble/v2/ca"
-	"github.com/letsencrypt/pebble/v2/db"
-	"github.com/letsencrypt/pebble/v2/va"
-	"github.com/letsencrypt/pebble/v2/wfe"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	osstorage "github.com/aUsernameWoW/certmagic-oss/storage"
 )
 
-const (
-	testBucket = "some-bucket"
-	testEndpoint = "https://oss-cn-hangzhou.aliyuncs.com"
-	testAccessKeyID = "test-access-key-id"
-	testAccessKeySecret = "test-access-key-secret"
-)
+const testBucket = "e2e-test-bucket"
 
-func testLogger(t *testing.T) *log.Logger {
-	return log.New(testWriter{t}, "test", log.LstdFlags)
+// --- Mock OSS Server (shared with storage tests but self-contained here) ---
+
+type mockObject struct {
+	data         []byte
+	lastModified time.Time
 }
 
-type testWriter struct {
-	t *testing.T
-}
-
-func (tw testWriter) Write(p []byte) (n int, err error) {
-	tw.t.Log(string(p))
-	return len(p), nil
-}
-
-func pebbleHandler(t *testing.T) http.Handler {
+func mockOSSServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	t.Setenv("PEBBLE_VA_ALWAYS_VALID", "1")
-	t.Setenv("PEBBLE_VA_NOSLEEP", "1")
+	var mu sync.Mutex
+	objects := make(map[string]*mockObject)
 
-	logger := testLogger(t)
-	db := db.NewMemoryStore()
-	ca := ca.New(logger, db, "", 0, 1, 100)
-	va := va.New(logger, 80, 443, false, "", db)
-	wfeImpl := wfe.New(logger, db, va, ca, false, false, 0, 0)
-	return wfeImpl.Handler()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		parts := strings.SplitN(path, "/", 2)
+		key := ""
+		if len(parts) >= 2 {
+			key = parts[1]
+		}
+
+		switch r.Method {
+		case http.MethodPut:
+			if r.Header.Get("X-Oss-Forbid-Overwrite") == "true" {
+				if _, exists := objects[key]; exists {
+					w.WriteHeader(http.StatusConflict)
+					writeXMLError(w, "FileAlreadyExists", "The object already exists.")
+					return
+				}
+			}
+			data, _ := io.ReadAll(r.Body)
+			objects[key] = &mockObject{data: data, lastModified: time.Now().UTC()}
+			w.WriteHeader(http.StatusOK)
+
+		case http.MethodGet:
+			if r.URL.Query().Get("list-type") == "2" {
+				handleListV2(w, objects, r.URL.Query().Get("prefix"), r.URL.Query().Get("delimiter"))
+				return
+			}
+			obj, exists := objects[key]
+			if !exists {
+				w.WriteHeader(http.StatusNotFound)
+				writeXMLError(w, "NoSuchKey", "The specified key does not exist.")
+				return
+			}
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(obj.data)))
+			w.Header().Set("Last-Modified", obj.lastModified.Format(http.TimeFormat))
+			w.Write(obj.data)
+
+		case http.MethodDelete:
+			delete(objects, key)
+			w.WriteHeader(http.StatusNoContent)
+
+		case http.MethodHead:
+			obj, exists := objects[key]
+			if !exists {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(obj.data)))
+			w.Header().Set("Last-Modified", obj.lastModified.Format(http.TimeFormat))
+
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
 }
 
-// MockOSSClient is a mock implementation of OSS client for testing
-type MockOSSClient struct {
-	objects map[string][]byte
-}
-
-func NewMockOSSClient() *MockOSSClient {
-	return &MockOSSClient{
-		objects: make(map[string][]byte),
+func writeXMLError(w http.ResponseWriter, code, message string) {
+	w.Header().Set("Content-Type", "application/xml")
+	type ossError struct {
+		XMLName xml.Name `xml:"Error"`
+		Code    string   `xml:"Code"`
+		Message string   `xml:"Message"`
 	}
+	xml.NewEncoder(w).Encode(ossError{Code: code, Message: message})
 }
 
-// MockOSSBucket is a mock implementation of OSS bucket for testing
-type MockOSSBucket struct {
-	client *MockOSSClient
+type listBucketResult struct {
+	XMLName  xml.Name     `xml:"ListBucketResult"`
+	Name     string       `xml:"Name"`
+	Prefix   string       `xml:"Prefix"`
+	KeyCount int          `xml:"KeyCount"`
+	MaxKeys  int          `xml:"MaxKeys"`
+	Contents []listObject `xml:"Contents"`
+}
+type listObject struct {
+	Key          string `xml:"Key"`
+	LastModified string `xml:"LastModified"`
+	Size         int    `xml:"Size"`
 }
 
-func (m *MockOSSClient) Bucket(name string) (*MockOSSBucket, error) {
-	return &MockOSSBucket{client: m}, nil
-}
-
-func (b *MockOSSBucket) PutObject(key string, reader io.Reader) error {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return err
+func handleListV2(w http.ResponseWriter, objects map[string]*mockObject, prefix, delimiter string) {
+	result := listBucketResult{Name: testBucket, Prefix: prefix, MaxKeys: 1000}
+	for key, obj := range objects {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if delimiter != "" {
+			rest := key[len(prefix):]
+			if strings.Contains(rest, delimiter) {
+				continue
+			}
+		}
+		result.Contents = append(result.Contents, listObject{
+			Key: key, LastModified: obj.lastModified.Format(time.RFC3339), Size: len(obj.data),
+		})
 	}
-	b.client.objects[key] = data
-	return nil
+	result.KeyCount = len(result.Contents)
+	w.Header().Set("Content-Type", "application/xml")
+	xml.NewEncoder(w).Encode(result)
 }
 
-func (b *MockOSSBucket) GetObject(key string) (io.ReadCloser, error) {
-	data, exists := b.client.objects[key]
-	if !exists {
-		return nil, fmt.Errorf("object not found")
-	}
-	return io.NopCloser(bytes.NewReader(data)), nil
+// newTestStorage creates a real Storage instance backed by the mock OSS server.
+func newTestStorage(t *testing.T) certmagic.Storage {
+	t.Helper()
+	server := mockOSSServer(t)
+	t.Cleanup(server.Close)
+
+	cfg := oss.LoadDefaultConfig().
+		WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test-ak", "test-sk", "")).
+		WithRegion("test-region").
+		WithEndpoint(server.URL).
+		WithUsePathStyle(true)
+
+	client := oss.NewClient(cfg)
+
+	// We need access to the internal struct, but it's in the storage package.
+	// Use NewStorage with the mock server's URL.
+	s, err := osstorage.NewStorage(context.Background(), osstorage.Config{
+		BucketName:      testBucket,
+		Region:          "test-region",
+		Endpoint:        server.URL,
+		AccessKeyID:     "test-ak",
+		AccessKeySecret: "test-sk",
+	})
+	require.NoError(t, err)
+	_ = client // NewStorage creates its own client
+
+	return s
 }
 
-func (b *MockOSSBucket) DeleteObject(key string) error {
-	delete(b.client.objects, key)
-	return nil
+// TestCertMagicIntegration verifies that our Storage implementation
+// satisfies the certmagic.Storage interface contract end-to-end.
+func TestCertMagicIntegration(t *testing.T) {
+	storage := newTestStorage(t)
+	ctx := context.Background()
+
+	// 1. Store certificates
+	certKey := "certificates/acme-v02.api.letsencrypt.org-directory/example.com/example.com.crt"
+	certData := []byte("-----BEGIN CERTIFICATE-----\nMIIFake...\n-----END CERTIFICATE-----")
+	require.NoError(t, storage.Store(ctx, certKey, certData))
+
+	keyKey := "certificates/acme-v02.api.letsencrypt.org-directory/example.com/example.com.key"
+	keyData := []byte("-----BEGIN EC PRIVATE KEY-----\nMIIFake...\n-----END EC PRIVATE KEY-----")
+	require.NoError(t, storage.Store(ctx, keyKey, keyData))
+
+	// 2. Verify they exist
+	assert.True(t, storage.Exists(ctx, certKey))
+	assert.True(t, storage.Exists(ctx, keyKey))
+
+	// 3. Load and verify
+	loaded, err := storage.Load(ctx, certKey)
+	require.NoError(t, err)
+	assert.Equal(t, certData, loaded)
+
+	// 4. Stat
+	info, err := storage.Stat(ctx, certKey)
+	require.NoError(t, err)
+	assert.Equal(t, certKey, info.Key)
+	assert.True(t, info.IsTerminal)
+
+	// 5. List
+	keys, err := storage.List(ctx, "certificates/", true)
+	require.NoError(t, err)
+	assert.Len(t, keys, 2)
+
+	// 6. Lock/Unlock cycle (certmagic does this during cert operations)
+	locker, ok := storage.(certmagic.Locker)
+	require.True(t, ok, "storage should implement certmagic.Locker")
+
+	err = locker.Lock(ctx, "example.com")
+	require.NoError(t, err)
+	err = locker.Unlock(ctx, "example.com")
+	require.NoError(t, err)
+
+	// 7. Delete
+	require.NoError(t, storage.Delete(ctx, certKey))
+	assert.False(t, storage.Exists(ctx, certKey))
+
+	// 8. Load deleted key should fail
+	_, err = storage.Load(ctx, certKey)
+	assert.ErrorIs(t, err, fs.ErrNotExist)
 }
 
-func (b *MockOSSBucket) GetObjectMeta(key string) (map[string][]string, error) {
-	if _, exists := b.client.objects[key]; !exists {
-		return nil, fmt.Errorf("object not found")
-	}
-	return map[string][]string{}, nil
-}
+// TestCertMagicWithEncryption tests the full flow with client-side encryption.
+func TestCertMagicWithEncryption(t *testing.T) {
+	server := mockOSSServer(t)
+	t.Cleanup(server.Close)
 
-func (b *MockOSSBucket) GetObjectDetailedMeta(key string) (map[string]string, error) {
-	if _, exists := b.client.objects[key]; !exists {
-		return nil, fmt.Errorf("object not found")
-	}
-	return map[string]string{
-		"Last-Modified": "Mon, 02 Jan 2006 15:04:05 GMT",
-		"Content-Length": "4",
-	}, nil
-}
-
-	// MockStorage implements certmagic.Storage for testing
-	type MockStorage struct {
-		client *MockOSSClient
-		bucket *MockOSSBucket
-		aead   tink.AEAD
-	}
-
-func NewMockStorage() (*MockStorage, error) {
-	client := NewMockOSSClient()
-	bucket, _ := client.Bucket(testBucket)
-	
-	return &MockStorage{
-		client: client,
-		bucket: bucket,
-		aead:   new(cleartext),
-	}, nil
-}
-
-func (s *MockStorage) Store(ctx context.Context, key string, value []byte) error {
-	return s.bucket.PutObject(key, bytes.NewReader(value))
-}
-
-func (s *MockStorage) Load(ctx context.Context, key string) ([]byte, error) {
-	reader, err := s.bucket.GetObject(key)
-	if err != nil {
-		return nil, fs.ErrNotExist
-	}
-	defer reader.Close()
-	return io.ReadAll(reader)
-}
-
-func (s *MockStorage) Delete(ctx context.Context, key string) error {
-	return s.bucket.DeleteObject(key)
-}
-
-func (s *MockStorage) Exists(ctx context.Context, key string) bool {
-	_, err := s.bucket.GetObjectMeta(key)
-	return err == nil
-}
-
-func (s *MockStorage) List(ctx context.Context, prefix string, recursive bool) ([]string, error) {
-	// Simplified implementation for testing
-	return []string{}, nil
-}
-
-func (s *MockStorage) Stat(ctx context.Context, key string) (certmagic.KeyInfo, error) {
-	var keyInfo certmagic.KeyInfo
-	
-	_, err := s.bucket.GetObjectMeta(key)
-	if err != nil {
-		return keyInfo, fs.ErrNotExist
-	}
-	
-	keyInfo.Key = key
-	keyInfo.Modified = time.Now()
-	keyInfo.Size = 4
-	keyInfo.IsTerminal = true
-	return keyInfo, nil
-}
-
-func (s *MockStorage) Lock(ctx context.Context, key string) error {
-	// Simplified implementation for testing
-	return nil
-}
-
-func (s *MockStorage) Unlock(ctx context.Context, key string) error {
-	// Simplified implementation for testing
-	return nil
-}
-
-// cleartext implements tink.AEAD interface, but simply store the object in plaintext
-type cleartext struct{}
-
-// encrypt returns the unencrypted plaintext data.
-func (cleartext) Encrypt(plaintext, _ []byte) ([]byte, error) {
-	return plaintext, nil
-}
-
-// decrypt returns the ciphertext as plaintext
-func (cleartext) Decrypt(ciphertext, _ []byte) ([]byte, error) {
-	return ciphertext, nil
-}
-
-func TestOSSStorage(t *testing.T) {
-	// start let's encrypt
-	pebble := httptest.NewTLSServer(pebbleHandler(t))
-	defer pebble.Close()
-
-	// Setup cert-magic
-	certmagic.DefaultACME.CA = pebble.URL + "/dir"
-	certmagic.DefaultACME.AltTLSALPNPort = 8443
-	
+	// Create encryption key
 	kh, err := keyset.NewHandle(aead.AES256GCMKeyTemplate())
-	assert.NoError(t, err)
-	_, err = aead.New(kh)
-	assert.NoError(t, err)
-	
-	// Use mock storage instead of real OSS for testing
-	storage, err := NewMockStorage()
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	kp, err := aead.New(kh)
+	require.NoError(t, err)
 
+	storage, err := osstorage.NewStorage(context.Background(), osstorage.Config{
+		BucketName:      testBucket,
+		Region:          "test-region",
+		Endpoint:        server.URL,
+		AccessKeyID:     "test-ak",
+		AccessKeySecret: "test-sk",
+		AEAD:            kp,
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := "certificates/encrypted/example.com.key"
+	secret := []byte("-----BEGIN EC PRIVATE KEY-----\nSuperSecretKey\n-----END EC PRIVATE KEY-----")
+
+	// Store encrypted
+	require.NoError(t, storage.Store(ctx, key, secret))
+
+	// Load and verify round-trip
+	loaded, err := storage.Load(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, secret, loaded)
+}
+
+// TestDefaultStorageAssignment verifies that our storage can be assigned
+// to certmagic.Default.Storage (the most common integration point).
+func TestDefaultStorageAssignment(t *testing.T) {
+	storage := newTestStorage(t)
+
+	// This is how users typically configure it
 	certmagic.Default.Storage = storage
-	// Configure  cert pool
-	pool := x509.NewCertPool()
-	pool.AddCert(pebble.Certificate())
-	certmagic.DefaultACME.TrustedRoots = pool
 
-	certmagic.DefaultACME.ListenHost = "127.0.0.1"
+	// Verify it works through the default config
+	ctx := context.Background()
+	key := "test/assignment/key"
+	require.NoError(t, certmagic.Default.Storage.Store(ctx, key, []byte("works")))
+
+	loaded, err := certmagic.Default.Storage.Load(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("works"), loaded)
 }
