@@ -249,6 +249,27 @@ func (s *Storage) Stat(ctx context.Context, key string) (certmagic.KeyInfo, erro
 // honor context cancellation as much as possible (in case the
 // caller wishes to give up and free resources before the lock
 // can be obtained).
+//
+// IMPORTANT: TOCTOU race condition warning
+//
+// When an expired lock is detected, this implementation performs a
+// delete-then-reacquire sequence (HeadObject to check expiration,
+// DeleteObject to remove the stale lock, then PutObject with
+// ForbidOverwrite to create a new lock). Because OSS does not support
+// atomic compare-and-swap (CAS) or conditional delete operations,
+// there is a time-of-check-to-time-of-use (TOCTOU) race window
+// between the delete and the subsequent put. In this window, another
+// process could also detect the expired lock, delete it, and
+// successfully acquire the lock — resulting in two processes believing
+// they hold the lock simultaneously.
+//
+// For single-instance Caddy deployments (the primary use case), this
+// is acceptable because lock contention is between goroutines within
+// the same process, and the ForbidOverwrite parameter provides
+// sufficient atomicity for the initial acquisition. However, this
+// implementation is NOT suitable for high-concurrency distributed
+// scenarios where multiple independent processes compete for the same
+// lock, as the TOCTOU window could lead to split-brain conditions.
 func (s *Storage) Lock(ctx context.Context, key string) error {
 	lockKey := s.objLockName(key)
 	
