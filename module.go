@@ -11,6 +11,7 @@ import (
 	"github.com/google/tink/go/aead"
 	"github.com/google/tink/go/insecurecleartextkeyset"
 	"github.com/google/tink/go/keyset"
+
 	"github.com/aUsernameWoW/certmagic-oss/storage"
 )
 
@@ -52,34 +53,20 @@ func (CaddyStorageOSS) CaddyModule() caddy.ModuleInfo {
 
 // CertMagicStorage returns a cert-magic storage.
 func (s *CaddyStorageOSS) CertMagicStorage() (certmagic.Storage, error) {
-	accessKeyID := s.AccessKeyID
-	if accessKeyID != "" && accessKeyID[0] == '{' && accessKeyID[len(accessKeyID)-1] == '}' {
-		// Handle environment variable placeholders like {env.VAR_NAME}
-		if len(accessKeyID) > 6 && accessKeyID[1:5] == "env." {
-			envVarName := accessKeyID[5 : len(accessKeyID)-1]
-			accessKeyID = os.Getenv(envVarName)
-		}
-	}
-	
-	accessKeySecret := s.AccessKeySecret
-	if accessKeySecret != "" && accessKeySecret[0] == '{' && accessKeySecret[len(accessKeySecret)-1] == '}' {
-		// Handle environment variable placeholders like {env.VAR_NAME}
-		if len(accessKeySecret) > 6 && accessKeySecret[1:5] == "env." {
-			envVarName := accessKeySecret[5 : len(accessKeySecret)-1]
-			accessKeySecret = os.Getenv(envVarName)
-		}
-	}
-	
+	repl := caddy.NewReplacer()
+
 	config := storage.Config{
-		BucketName:      s.BucketName,
-		Region:          s.Region,
-		Endpoint:        s.Endpoint,
-		AccessKeyID:     accessKeyID,
-		AccessKeySecret: accessKeySecret,
+		BucketName:      repl.ReplaceAll(s.BucketName, ""),
+		Region:          repl.ReplaceAll(s.Region, ""),
+		Endpoint:        repl.ReplaceAll(s.Endpoint, ""),
+		AccessKeyID:     repl.ReplaceAll(s.AccessKeyID, ""),
+		AccessKeySecret: repl.ReplaceAll(s.AccessKeySecret, ""),
 	}
 
-	if len(s.EncryptionKeySet) > 0 {
-		f, err := os.Open(s.EncryptionKeySet)
+	encryptionKeySet := repl.ReplaceAll(s.EncryptionKeySet, "")
+
+	if len(encryptionKeySet) > 0 {
+		f, err := os.Open(encryptionKeySet)
 		if err != nil {
 			return nil, err
 		}
