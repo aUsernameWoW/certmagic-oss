@@ -165,10 +165,7 @@ func (s *Storage) Exists(ctx context.Context, key string) bool {
 		Key:    oss.Ptr(key),
 	})
 	
-	if err != nil {
-		return false
-	}
-	return true
+	return err == nil
 }
 
 // List returns all keys that match prefix.

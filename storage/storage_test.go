@@ -96,7 +96,7 @@ func mockOSSServer(t *testing.T) *httptest.Server {
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(obj.data)))
 			w.Header().Set("Last-Modified", obj.lastModified.Format(http.TimeFormat))
 			w.WriteHeader(http.StatusOK)
-			w.Write(obj.data)
+			_, _ = w.Write(obj.data)
 
 		case http.MethodDelete:
 			delete(objects, key)
@@ -125,7 +125,7 @@ func writeOSSError(w http.ResponseWriter, code, message string) {
 		Code    string   `xml:"Code"`
 		Message string   `xml:"Message"`
 	}
-	xml.NewEncoder(w).Encode(ossError{Code: code, Message: message})
+	_ = xml.NewEncoder(w).Encode(ossError{Code: code, Message: message})
 }
 
 // ListBucketResult is the XML response for ListObjectsV2.
@@ -187,7 +187,7 @@ func handleListV2(w http.ResponseWriter, objects map[string]*mockObject, prefix,
 
 	result.KeyCount = len(result.Contents)
 	w.Header().Set("Content-Type", "application/xml")
-	xml.NewEncoder(w).Encode(result)
+	_ = xml.NewEncoder(w).Encode(result)
 }
 
 // setupTestStorage creates a Storage instance backed by a mock OSS server.
