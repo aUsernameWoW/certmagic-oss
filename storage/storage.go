@@ -173,36 +173,59 @@ func (s *Storage) Exists(ctx context.Context, key string) bool {
 // will be enumerated (i.e. "directories"
 // should be walked); otherwise, only keys
 // prefixed exactly by prefix will be listed.
+//
+// Like certmagic's FileStorage, the prefix is treated as a "directory":
+// a non-recursive List returns its immediate children, both terminal
+// objects and "subdirectories" (without a trailing slash), so callers
+// such as Caddy's ECH config loader can walk into them.
 func (s *Storage) List(ctx context.Context, prefix string, recursive bool) ([]string, error) {
+	// A trailing slash keeps sibling keys that merely share the string
+	// prefix (e.g. "ech/configsXYZ" for prefix "ech/configs") out of the
+	// results, and makes the delimiter yield children rather than the
+	// prefix itself.
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
 	var names []string
-	
+
 	// Set up options for listing objects
 	request := &oss.ListObjectsV2Request{
 		Bucket: oss.Ptr(s.bucketName),
 		Prefix: oss.Ptr(prefix),
 	}
-	
+
 	// If not recursive, we need to set delimiter to "/"
 	if !recursive {
 		request.Delimiter = oss.Ptr("/")
 	}
-	
+
 	// Create paginator for listing objects
 	p := s.client.NewListObjectsV2Paginator(request)
-	
+
 	// Iterate through the object pages
 	for p.HasNext() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("listing objects: %w", err)
 		}
-		
+
 		// Add object keys to result
 		for _, object := range page.Contents {
 			names = append(names, *object.Key)
 		}
+
+		// With a delimiter set, "subdirectories" are reported as
+		// CommonPrefixes rather than Contents; return them as keys too,
+		// or directory hierarchies would be invisible to callers.
+		for _, cp := range page.CommonPrefixes {
+			if cp.Prefix == nil {
+				continue
+			}
+			names = append(names, strings.TrimSuffix(*cp.Prefix, "/"))
+		}
 	}
-	
+
 	return names, nil
 }
 

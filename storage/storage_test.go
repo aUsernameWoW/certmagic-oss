@@ -311,17 +311,48 @@ func TestList_NonRecursive(t *testing.T) {
 		require.NoError(t, s.Store(ctx, k, []byte("data")))
 	}
 
-	// Non-recursive should only return direct children (not "directories")
+	// Non-recursive should return all immediate children: terminal keys
+	// AND "subdirectories" (as keys without a trailing slash), matching
+	// certmagic FileStorage semantics.
 	result, err := s.List(ctx, "acme/", false)
 	require.NoError(t, err)
-	// Should contain "acme/toplevel.pem" as a direct key
-	assert.Contains(t, result, "acme/toplevel.pem")
-	// Should NOT contain nested keys (they become common prefixes)
+	assert.ElementsMatch(t, []string{
+		"acme/toplevel.pem",
+		"acme/example.com",
+		"acme/sub.example.com",
+	}, result)
+	// Deeper keys must not leak through
 	for _, r := range result {
-		// Direct keys under acme/ should not have another / after "acme/"
 		rest := strings.TrimPrefix(r, "acme/")
 		assert.NotContains(t, rest, "/", "non-recursive list should not return nested keys: %s", r)
 	}
+}
+
+// TestList_NonRecursive_DirectoriesOnly mirrors how Caddy loads ECH configs:
+// List("ech/configs", false) — prefix without a trailing slash, and nothing
+// but "subdirectories" underneath. This must return the config ID directories,
+// or Caddy regenerates a fresh ECH config on every provision.
+func TestList_NonRecursive_DirectoriesOnly(t *testing.T) {
+	s, _ := setupTestStorage(t)
+	ctx := context.Background()
+
+	keys := []string{
+		"ech/configs/0/config.bin",
+		"ech/configs/0/key.bin",
+		"ech/configs/0/meta.json",
+		"ech/configs/143/config.bin",
+		"ech/configs/143/key.bin",
+		"ech/configs/143/meta.json",
+		// shares the string prefix but is a sibling, must not match
+		"ech/configsOLD/9/config.bin",
+	}
+	for _, k := range keys {
+		require.NoError(t, s.Store(ctx, k, []byte("data")))
+	}
+
+	result, err := s.List(ctx, "ech/configs", false)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"ech/configs/0", "ech/configs/143"}, result)
 }
 
 func TestEncryption(t *testing.T) {
